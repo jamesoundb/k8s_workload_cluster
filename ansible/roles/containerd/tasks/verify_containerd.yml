@@ -1,0 +1,26 @@
+---
+# Verify containerd installation and configuration
+
+- name: Check if containerd is installed
+  command: which containerd
+  register: containerd_installed
+  changed_when: false
+  ignore_errors: true
+
+- name: Check if containerd service exists
+  stat:
+    path: /etc/systemd/system/containerd.service
+  register: containerd_service_file
+
+- name: Check containerd service status
+  systemd:
+    name: containerd
+  register: containerd_service_status
+  ignore_errors: true
+
+- name: Display containerd installation status
+  debug:
+    msg: |
+      Containerd installed: {{ containerd_installed.rc == 0 }}
+      Service file exists: {{ containerd_service_file.stat.exists }}
+      Service active: {{ containerd_service_status.status.ActiveState | default('unknown') }}

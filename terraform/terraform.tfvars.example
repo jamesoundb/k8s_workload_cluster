@@ -1,0 +1,39 @@
+# Proxmox connection configuration
+proxmox_api_url          = "https://YOUR_PROXMOX_HOST:8006/api2/json"
+proxmox_api_token_id     = "root@pam!terraform"
+proxmox_api_token_secret = "REPLACE_WITH_YOUR_API_TOKEN_SECRET"
+proxmox_tls_insecure     = true
+proxmox_node             = "pve"
+proxmox_host             = "YOUR_PROXMOX_HOST"
+
+# Worker template configuration
+template_name = "k8s-worker-template-ubuntu-2404"  # Created by create_worker_template.sh
+
+# Worker cluster configuration
+worker_count = 3
+
+# Worker node specifications (optimized for 24 CPU / 64GB machine)
+worker_cores      = 6      # 6 CPU cores per worker (18 total + 4 for pihole = 22/24)
+worker_memory     = 18432  # 18GB RAM per worker (54GB total + 8GB pihole = 62/64GB)
+worker_disk_size  = "100" # 100GB storage per worker
+storage_pool      = "local-lvm"
+
+# Network configuration
+worker_ips = [
+  "192.168.1.83",  # k8s-worker-1
+  "192.168.1.84",  # k8s-worker-2
+  "192.168.1.85"   # k8s-worker-3
+]
+
+worker_mac_addresses = [
+  "52:54:00:83:00:01",  # k8s-worker-1 static MAC
+  "52:54:00:84:00:02",  # k8s-worker-2 static MAC
+  "52:54:00:85:00:03"   # k8s-worker-3 static MAC
+]
+
+gateway_ip = "192.168.1.1"
+
+# SSH configuration (matching control plane setup)
+ssh_user             = "k8s_user"  # Base user, actual users will be k8s_83, k8s_84, k8s_85
+ssh_public_key       = "ssh-rsa REPLACE_WITH_YOUR_SSH_PUBLIC_KEY user@host"
+ssh_private_key_path = "~/.ssh/proxmox"

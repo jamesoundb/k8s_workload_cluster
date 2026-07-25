@@ -1,0 +1,53 @@
+---
+# Kubernetes role - Install Kubernetes packages for worker nodes
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Install required packages for Kubernetes repository
+  apt:
+    name: "{{ kubernetes_prereq_packages }}"
+    state: present
+
+- name: Create keyrings directory
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Add Kubernetes apt signing key
+  shell: |
+    curl -fsSL {{ kubernetes_key_url }} | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  args:
+    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+- name: Add Kubernetes apt repository
+  lineinfile:
+    path: /etc/apt/sources.list.d/kubernetes.list
+    line: 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] {{ kubernetes_repo_base }} /'
+    create: yes
+    mode: '0644'
+
+- name: Update apt cache for Kubernetes packages
+  apt:
+    update_cache: yes
+
+- name: Install Kubernetes packages
+  apt:
+    name: "{{ kubernetes_packages }}"
+    state: present
+    update_cache: yes
+
+- name: Hold Kubernetes packages to prevent automatic updates
+  dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: "{{ kubernetes_hold_packages }}"
+
+- name: Enable and start kubelet service
+  systemd:
+    name: kubelet
+    enabled: yes
+    state: started

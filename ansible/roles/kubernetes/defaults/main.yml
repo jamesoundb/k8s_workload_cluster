@@ -1,0 +1,29 @@
+---
+# Default variables for kubernetes role
+
+# Kubernetes version
+kubernetes_version: "1.31.0"
+
+# Kubernetes repository configuration
+kubernetes_repo_base: "https://pkgs.k8s.io/core:/stable:/v1.31/deb/"
+kubernetes_key_url: "https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key"
+
+# Packages to install
+kubernetes_packages:
+  - "kubelet=1.31.0-1.1"
+  - "kubeadm=1.31.0-1.1"
+  - "kubectl=1.31.0-1.1"
+
+# Packages to hold
+kubernetes_hold_packages:
+  - kubelet
+  - kubeadm
+  - kubectl
+
+# Prerequisites
+kubernetes_prereq_packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gpg
+  - software-properties-common

@@ -1,0 +1,91 @@
+---
+# Common role - OS preparation tasks for Kubernetes worker nodes
+
+- name: Check node health and connectivity
+  include_tasks: node_health_check.yml
+
+- name: Set hostname
+  hostname:
+    name: "{{ inventory_hostname }}"
+  when: not skip_hostname_setup | default(false)
+
+- name: Configure hosts file for cluster nodes
+  lineinfile:
+    path: /etc/hosts
+    line: "{{ hostvars[item]['ansible_host'] }} {{ item }}"
+    state: present
+  loop: "{{ groups['all'] | default([]) }}"
+  when: hostvars[item]['ansible_host'] is defined
+
+- name: Wait for apt locks to be released
+  shell: |
+    while lsof /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || lsof /var/lib/apt/lists/lock >/dev/null 2>&1 || lsof /var/cache/apt/archives/lock >/dev/null 2>&1 || lsof /var/lib/dpkg/lock >/dev/null 2>&1; do
+      echo "Waiting for apt lock to be released..."
+      sleep 5
+    done
+  changed_when: false
+
+- name: Fix any corrupted dpkg files
+  shell: |
+    rm -rf /var/lib/dpkg/updates/*
+    touch /var/lib/dpkg/status
+  changed_when: true
+  ignore_errors: true
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Install required packages
+  apt:
+    name: "{{ common_packages }}"
+    state: present
+
+- name: Disable swap
+  shell: |
+    swapoff -a
+    sed -i '/swap/d' /etc/fstab
+  changed_when: true
+
+- name: Enable required kernel modules
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  with_items: "{{ kernel_modules }}"
+
+- name: Setup required kernel modules to load at boot
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      {% for module in kernel_modules %}
+      {{ module }}
+      {% endfor %}
+    mode: '0644'
+
+- name: Configure sysctl params for Kubernetes
+  copy:
+    dest: /etc/sysctl.d/k8s.conf
+    content: |
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward = 1
+    mode: '0644'
+
+- name: Apply sysctl parameters
+  command: sysctl --system
+  changed_when: true
+
+- name: Optimize kernel parameters for container workloads
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.d/99-kubernetes-performance.conf
+  with_items: "{{ sysctl_settings }}"
+
+- name: Ensure systemd-resolved is running (for DNS functionality)
+  systemd:
+    name: systemd-resolved
+    state: started
+    enabled: yes

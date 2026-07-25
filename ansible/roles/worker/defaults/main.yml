@@ -1,0 +1,18 @@
+---
+# Default variables for worker role
+
+# Worker node specific labels
+worker_labels:
+  - "node-role.kubernetes.io/worker="
+  - "cluster.local/workload-node=true"
+
+# Worker node resource limits
+worker_max_pods: 250
+
+# Kubelet configuration for workers
+kubelet_extra_args:
+  - "--max-pods=250"
+  - "--cluster-dns=10.245.0.10"
+  - "--cluster-domain=cluster.local"
+  - "--container-runtime-endpoint=unix:///run/containerd/containerd.sock"
+  - "--runtime-request-timeout=15m"

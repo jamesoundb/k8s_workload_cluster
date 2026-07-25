@@ -1,0 +1,244 @@
+---
+# Containerd role - Container runtime installation and configuration for worker nodes
+
+- name: Verify containerd installation
+  include_tasks: verify_containerd.yml
+  
+- name: Check if containerd socket exists
+  stat:
+    path: /run/containerd/containerd.sock
+  register: containerd_socket_check
+
+- name: Check if services exist
+  stat:
+    path: "/etc/systemd/system/{{ item }}.service"
+  register: service_status
+  loop:
+    - kubelet
+    - containerd
+
+- name: Stop kubelet and containerd services if they exist
+  systemd:
+    name: "{{ item.item }}"
+    state: stopped
+  loop: "{{ service_status.results }}"
+  when: item.stat is defined and item.stat.exists
+  ignore_errors: true
+
+- name: Remove previous containerd installation
+  apt:
+    name:
+      - containerd
+      - containerd.io
+    state: absent
+    purge: true
+  
+- name: Clean up containerd configuration directory
+  file:
+    path: /etc/containerd
+    state: absent
+  
+- name: Create fresh containerd configuration directory
+  file:
+    path: /etc/containerd
+    state: directory
+    mode: '0755'
+
+- name: Update apt cache
+  apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install containerd from Ubuntu repository
+  apt:
+    name: containerd
+    state: present
+  register: containerd_ubuntu_install
+  ignore_errors: true
+
+- name: Install containerd from Docker repository
+  block:
+    - name: Create Docker apt keyring directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker's official GPG key
+      shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+
+    - name: Add Docker repository
+      shell: |
+        echo "deb [arch={{ download_arch }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
+      
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      
+    - name: Install containerd.io
+      apt:
+        name: containerd.io
+        state: present
+  when: containerd_ubuntu_install.failed is defined and containerd_ubuntu_install.failed
+
+- name: Create CNI directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/cni/bin
+    - /etc/cni/net.d
+
+- name: Download CNI plugins with curl
+  shell: |
+    curl -L --output /tmp/cni-plugins.tgz https://github.com/containernetworking/plugins/releases/download/v{{ cni_plugins_version }}/cni-plugins-linux-{{ download_arch }}-v{{ cni_plugins_version }}.tgz
+  args:
+    creates: /tmp/cni-plugins.tgz
+  register: cni_download
+
+- name: Extract CNI plugins
+  shell: |
+    tar xzf /tmp/cni-plugins.tgz -C /opt/cni/bin/
+  args:
+    creates: /opt/cni/bin/bridge
+  when: cni_download is not failed
+
+- name: Set CNI plugin permissions
+  file:
+    path: /opt/cni/bin
+    mode: '0755'
+    recurse: yes
+  when: cni_download is not failed
+
+- name: Cleanup CNI download
+  file:
+    path: /tmp/cni-plugins.tgz
+    state: absent
+  when: cni_download is not failed
+
+- name: Create default CNI configuration
+  copy:
+    dest: /etc/cni/net.d/10-containerd-net.conflist
+    content: |
+      {
+        "cniVersion": "1.0.0",
+        "name": "containerd-net",
+        "plugins": [
+          {
+            "type": "bridge",
+            "bridge": "cni0",
+            "isGateway": true,
+            "ipMasq": true,
+            "promiscMode": true,
+            "ipam": {
+              "type": "host-local",
+              "ranges": [
+                [{
+                  "subnet": "{{ container_network_cidr }}"
+                }]
+              ],
+              "routes": [
+                { "dst": "0.0.0.0/0" }
+              ]
+            }
+          },
+          {
+            "type": "portmap",
+            "capabilities": {"portMappings": true}
+          }
+        ]
+      }
+    mode: '0644'
+
+- name: Configure containerd for Kubernetes
+  copy:
+    dest: /etc/containerd/config.toml
+    content: |
+      version = 2
+      root = "/var/lib/containerd"
+      state = "/run/containerd"
+      [grpc]
+        address = "/run/containerd/containerd.sock"
+        uid = 0
+        gid = 0
+      [plugins]
+        [plugins."io.containerd.grpc.v1.cri"]
+          sandbox_image = "registry.k8s.io/pause:3.9"
+          [plugins."io.containerd.grpc.v1.cri".containerd]
+            snapshotter = "overlayfs"
+            default_runtime_name = "runc"
+            [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+              [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+                runtime_type = "io.containerd.runc.v2"
+                [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+                  SystemdCgroup = true
+    mode: '0644'
+
+- name: Restart containerd service
+  systemd:
+    name: containerd
+    state: restarted
+    daemon_reload: true
+    enabled: true
+
+- name: Check containerd service status
+  shell: systemctl status containerd
+  register: containerd_status_check
+  changed_when: false
+  ignore_errors: true
+
+- name: Display containerd service status
+  debug:
+    var: containerd_status_check.stdout_lines
+
+- name: Ensure containerd service is running
+  systemd:
+    name: containerd
+    state: started
+    enabled: true
+
+- name: Wait for containerd socket to be created
+  wait_for:
+    path: /run/containerd/containerd.sock
+    state: present
+    timeout: 30
+    delay: 5
+
+- name: Verify containerd socket permissions
+  file:
+    path: /run/containerd/containerd.sock
+    mode: '0660'
+
+- name: Check if kubelet service file exists
+  stat:
+    path: "/etc/systemd/system/kubelet.service"
+  register: kubelet_service_exists
+
+- name: Start kubelet service if it exists
+  systemd:
+    name: kubelet
+    state: restarted
+    enabled: true
+  when: kubelet_service_exists.stat.exists
+
+- name: Wait for kubelet to restart if it exists
+  pause:
+    seconds: 10
+  when: kubelet_service_exists.stat.exists
+    
+- name: Check containerd status
+  command: systemctl status containerd
+  register: containerd_status
+  changed_when: false
+  ignore_errors: true
+  
+- name: Display containerd status
+  debug:
+    var: containerd_status.stdout_lines

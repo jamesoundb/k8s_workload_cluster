@@ -1,0 +1,38 @@
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+serverTLSBootstrap: true
+authentication:
+  webhook:
+    enabled: true
+  anonymous:
+    enabled: false
+authorization:
+  mode: Webhook
+cgroupDriver: systemd
+containerRuntimeEndpoint: unix:///run/containerd/containerd.sock
+maxPods: {{ worker_max_pods | default(250) }}
+clusterDNS:
+  - "10.245.0.10"
+clusterDomain: "cluster.local"
+resolvConf: "/run/systemd/resolve/resolv.conf"
+runtimeRequestTimeout: "15m"
+systemReserved:
+  cpu: "100m"
+  memory: "512Mi"
+  ephemeral-storage: "2Gi"
+kubeReserved:
+  cpu: "100m"
+  memory: "512Mi"
+  ephemeral-storage: "2Gi"
+evictionHard:
+  memory.available: "200Mi"
+  nodefs.available: "10%"
+  imagefs.available: "15%"
+evictionSoft:
+  memory.available: "300Mi"
+  nodefs.available: "15%"
+  imagefs.available: "20%"
+evictionSoftGracePeriod:
+  memory.available: "30s"
+  nodefs.available: "1m"
+  imagefs.available: "1m"

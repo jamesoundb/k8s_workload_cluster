@@ -1,0 +1,38 @@
+---
+# Node health check tasks
+
+- name: Check if node is reachable
+  ping:
+  register: ping_result
+
+- name: Display node connectivity status
+  debug:
+    msg: "Node {{ inventory_hostname }} is reachable"
+  when: ping_result is succeeded
+
+- name: Check disk space
+  shell: df -h /
+  register: disk_space
+  changed_when: false
+
+- name: Display disk usage
+  debug:
+    msg: "Disk usage on {{ inventory_hostname }}: {{ disk_space.stdout_lines }}"
+
+- name: Check memory
+  shell: free -h
+  register: memory_info
+  changed_when: false
+
+- name: Display memory info
+  debug:
+    msg: "Memory on {{ inventory_hostname }}: {{ memory_info.stdout_lines }}"
+
+- name: Check CPU info
+  shell: nproc
+  register: cpu_count
+  changed_when: false
+
+- name: Display CPU count
+  debug:
+    msg: "CPU cores on {{ inventory_hostname }}: {{ cpu_count.stdout }}"

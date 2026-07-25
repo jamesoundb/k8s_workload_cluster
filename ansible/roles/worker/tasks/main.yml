@@ -1,0 +1,143 @@
+---
+# Worker role - Configure and join worker nodes to Kubernetes cluster
+
+- name: Generate worker join token on control plane
+  shell: kubeadm token create --print-join-command
+  register: join_command_result
+  delegate_to: "{{ control_plane_delegate_host | default('k8s-node-1') }}"
+  remote_user: "{{ control_plane_remote_user | default('k8s_80') }}"
+  run_once: true
+
+- name: Set join command fact
+  set_fact:
+    join_command: "{{ join_command_result.stdout.strip() }}"
+
+- name: Display join command (for debugging)
+  debug:
+    msg: "Join command: {{ join_command }}"
+
+- name: Reset any existing kubeadm configuration
+  shell: kubeadm reset -f
+  register: kubeadm_reset_result
+
+- name: Clean up old kubelet configuration
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/kubernetes/kubelet.conf
+    - /etc/kubernetes/pki
+    - /var/lib/kubelet/pki
+
+- name: Join worker node to cluster
+  shell: "{{ join_command }}"
+  register: join_result
+
+- name: Display join result
+  debug:
+    var: join_result.stdout_lines
+
+- name: Wait for kubelet to start properly
+  wait_for:
+    port: 10250
+    host: "{{ ansible_default_ipv4.address }}"
+    timeout: 60
+
+- name: Ensure kubelet service is running
+  systemd:
+    name: kubelet
+    state: started
+    enabled: yes
+
+- name: Apply worker node labels
+  shell: "kubectl label node {{ inventory_hostname }} {{ item }} --overwrite"
+  loop: "{{ worker_labels }}"
+  delegate_to: "{{ control_plane_delegate_host | default('k8s-node-1') }}"
+  remote_user: "{{ control_plane_remote_user | default('k8s_80') }}"
+
+- name: Configure kubelet with worker-specific settings
+  template:
+    src: kubelet-config.yaml.j2
+    dest: /var/lib/kubelet/config.yaml
+    backup: yes
+    mode: '0644'
+
+- name: Set kubelet extra args for worker optimization
+  lineinfile:
+    path: /etc/default/kubelet
+    line: 'KUBELET_EXTRA_ARGS="{{ kubelet_extra_args | join(" ") }}"'
+    regexp: '^KUBELET_EXTRA_ARGS='
+    create: yes
+
+- name: Ensure kubelet service is running with new configuration
+  systemd:
+    name: kubelet
+    state: started
+    enabled: yes
+
+- name: Wait for worker node to be ready
+  shell: kubectl get node {{ inventory_hostname }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+  register: node_ready_status
+  until: node_ready_status.stdout == "True"
+  retries: 10
+  delay: 30
+  delegate_to: "{{ control_plane_delegate_host | default('k8s-node-1') }}"
+  remote_user: "{{ control_plane_remote_user | default('k8s_80') }}"
+
+- name: Get worker node information
+  shell: kubectl get node {{ inventory_hostname }} -o wide
+  register: node_info
+  delegate_to: "{{ control_plane_delegate_host | default('k8s-node-1') }}"
+  remote_user: "{{ control_plane_remote_user | default('k8s_80') }}"
+
+- name: Display worker node status
+  debug:
+    var: node_info.stdout_lines
+
+- name: Verify kubelet is running
+  systemd:
+    name: kubelet
+  register: kubelet_status
+
+- name: Display kubelet status
+  debug:
+    msg: |
+      Kubelet service status: {{ kubelet_status.status.ActiveState }}
+      Worker {{ inventory_hostname }} is ready and operational
+
+- name: Test pod scheduling on worker node
+  shell: |
+    kubectl run test-worker-{{ inventory_hostname }} --image=nginx:alpine --restart=Never --overrides='
+    {
+      "spec": {
+        "nodeSelector": {
+          "kubernetes.io/hostname": "{{ inventory_hostname }}"
+        }
+      }
+    }'
+  delegate_to: "{{ control_plane_delegate_host | default('k8s-node-1') }}"
+  remote_user: "{{ control_plane_remote_user | default('k8s_80') }}"
+
+- name: Wait for test pod to be running
+  shell: kubectl get pod test-worker-{{ inventory_hostname }} -o jsonpath='{.status.phase}'
+  register: pod_status
+  until: pod_status.stdout == "Running"
+  retries: 10
+  delay: 5
+  delegate_to: "{{ control_plane_delegate_host | default('k8s-node-1') }}"
+  remote_user: "{{ control_plane_remote_user | default('k8s_80') }}"
+
+- name: Clean up test pod
+  shell: kubectl delete pod test-worker-{{ inventory_hostname }} --ignore-not-found=true
+  delegate_to: "{{ control_plane_delegate_host | default('k8s-node-1') }}"
+  remote_user: "{{ control_plane_remote_user | default('k8s_80') }}"
+
+- name: Final verification summary
+  debug:
+    msg: |
+      ✅ Worker verification complete for {{ inventory_hostname }}:
+      - Node status: Ready
+      - Kubelet status: {{ kubelet_status.status.ActiveState }}
+      - Pod scheduling: Working
+      - Worker IP: {{ ansible_host }}
+      - Joined cluster: {{ control_plane_vip }}

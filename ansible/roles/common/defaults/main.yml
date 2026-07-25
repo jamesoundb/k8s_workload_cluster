@@ -1,0 +1,49 @@
+---
+# Default variables for common role - worker node optimized
+
+# Packages to install
+common_packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+  - python3-pip
+  - python3-venv
+  - python3-dev
+  - libffi-dev
+  - libssl-dev
+  - git
+  - software-properties-common
+  - htop
+  - iotop
+  - iftop
+  - atop
+  - nfs-common
+  - open-iscsi
+
+# Kernel modules to enable
+kernel_modules:
+  - overlay
+  - br_netfilter
+
+# System optimization parameters for AMD64 workers
+sysctl_settings:
+  - { name: 'kernel.panic', value: '10' }
+  - { name: 'kernel.panic_on_oops', value: '1' }
+  - { name: 'vm.overcommit_memory', value: '1' }
+  - { name: 'vm.panic_on_oom', value: '0' }
+  - { name: 'net.ipv4.tcp_slow_start_after_idle', value: '0' }
+  - { name: 'net.core.somaxconn', value: '65536' }
+  - { name: 'net.ipv4.tcp_max_syn_backlog', value: '16384' }
+  - { name: 'fs.inotify.max_user_watches', value: '1048576' }
+  - { name: 'fs.file-max', value: '2000000' }
+  - { name: 'vm.swappiness', value: '1' }
+  - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+  - { name: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+  - { name: 'net.ipv4.ip_forward', value: '1' }
+  - { name: 'vm.max_map_count', value: '262144' }
+  - { name: 'net.core.netdev_max_backlog', value: '5000' }
+
+# Worker node specific settings
+skip_hostname_setup: false

@@ -1,0 +1,92 @@
+---
+- name: Join Kubernetes worker nodes to existing control plane cluster
+  hosts: workers
+  become: true
+  serial: 1  # Join workers one at a time for stability
+  vars:
+    # Kubernetes cluster configuration
+    kubernetes_version: "1.34.1"
+    control_plane_endpoint: "{{ control_plane_vip }}:{{ control_plane_port }}"
+    
+    # Control plane connection for delegation
+    control_plane_delegate_host: "k8s-node-1"
+    control_plane_remote_user: "k8s_80"
+  
+  pre_tasks:
+    - name: Display worker join information
+      debug:
+        msg: |
+          Joining worker {{ inventory_hostname }} to control plane cluster
+          Control Plane VIP: {{ control_plane_vip }}
+          Worker IP: {{ ansible_host }}
+          Worker Index: {{ worker_index }}
+
+    - name: Verify control plane accessibility
+      wait_for:
+        host: "{{ control_plane_vip }}"
+        port: "{{ control_plane_port }}"
+        timeout: 30
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+  roles:
+    # Self-contained roles for worker nodes
+    - role: common
+      vars:
+        skip_hostname_setup: true  # Hostname already set by cloud-init
+    
+    - role: containerd
+      vars:
+        containerd_version: "1.7.28"
+
+    - role: kubernetes
+      vars:
+        kubernetes_version: "{{ kubernetes_version }}"
+
+    - role: worker
+
+  post_tasks:
+    - name: Approve pending kubelet-serving CSRs for worker node
+      shell: |
+        # Find and approve all pending CSRs for this worker node
+        PENDING_CSRS=$(kubectl get csr -o jsonpath='{.items[?(@.status.conditions | length==0 && @.spec.signerName=="kubernetes.io/kubelet-serving" && @.spec.username=="system:node:{{ inventory_hostname }}")].metadata.name}' 2>/dev/null)
+        
+        if [ -z "$PENDING_CSRS" ]; then
+          echo "✅ No pending kubelet-serving CSRs for {{ inventory_hostname }}"
+          exit 0
+        fi
+        
+        echo "Approving kubelet-serving CSRs for {{ inventory_hostname }}: $PENDING_CSRS"
+        echo "$PENDING_CSRS" | xargs -I {} kubectl certificate approve {} 2>/dev/null
+        
+        # Wait for certificates to be issued
+        for i in {1..30}; do
+          APPROVED=$(kubectl get csr -o jsonpath='{.items[?(@.spec.signerName=="kubernetes.io/kubelet-serving" && @.spec.username=="system:node:{{ inventory_hostname }}" && @.status.conditions[0].type=="Approved")].metadata.name}' 2>/dev/null | wc -w)
+          if [ "$APPROVED" -gt 0 ]; then
+            echo "✅ Kubelet certificates issued for {{ inventory_hostname }}"
+            exit 0
+          fi
+          sleep 2
+        done
+        
+        echo "⚠️  Timeout waiting for certificate issuance, but CSRs have been approved"
+      register: csr_approval_result
+      delegate_to: "{{ control_plane_delegate_host }}"
+      remote_user: "{{ control_plane_remote_user }}"
+      ignore_errors: true
+    
+    - name: Display CSR approval status
+      debug:
+        msg: "{{ csr_approval_result.stdout_lines }}"
+      when: csr_approval_result.stdout_lines is defined
+
+    - name: Display worker join completion
+      debug:
+        msg: |
+          ✅ Worker {{ inventory_hostname }} successfully joined cluster
+          Node IP: {{ ansible_host }}
+          Control Plane: {{ control_plane_vip }}
+          
+          To verify cluster status:
+          kubectl get nodes -o wide
